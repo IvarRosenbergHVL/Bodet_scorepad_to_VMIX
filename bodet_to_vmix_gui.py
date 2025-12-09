@@ -254,12 +254,12 @@ def decode_score(d1: int, d2: int, d3: int, prev: int) -> int:
     """
     Håndterer Bodet sine varianter:
 
-      - 0 4 0  -> 4   (før 10 poeng)
-      - 0 8 0  -> 8
-      - 0 1 7  -> 17
-      - 0 6 5  -> 65
-      - 0 7 0  -> 70 (når prev >= 10)
-      - 1 0 3  -> 103
+      - 0 0 4  -> 4   (enkeltsiffer)
+      - 0 4 0  -> 4   (før 10 poeng) eller 40 (etter 10)
+      - 0 1 7  -> 17  (tosifret)
+      - 0 6 5  -> 65  (tosifret)
+      - 1 0 3  -> 103 (tresifret)
+      - 1 1 4  -> 114 (tresifret)
     """
 
     # Alt null
@@ -273,36 +273,48 @@ def decode_score(d1: int, d2: int, d3: int, prev: int) -> int:
         else:
             return d2
 
-    # 0 0 x
+    # 0 0 x: enkeltsiffer
     if d1 == 0 and d2 == 0 and d3 > 0:
         return d3
 
-    # 0 x y
+    # 0 x y: tosifret
     if d1 == 0:
         return d2 * 10 + d3
 
+    # x y z: kan være tosifret (xy) eller tresifret (xyz)
     candidate2 = d1 * 10 + d2
     candidate3 = d1 * 100 + d2 * 10 + d3
 
+    # Hvis vi ikke har tidligere verdi, bruk heuristikk
     if prev is None:
-        return candidate3 if candidate3 >= 100 else candidate2
+        return candidate3
 
     def is_small_step(new: int, old: int) -> bool:
         diff = new - old
         return 0 <= diff <= 3
 
+    # Hvis forrige score var >= 100, foretrekk alltid tresifret tolkning
     if prev >= 100:
         if is_small_step(candidate3, prev):
             return candidate3
-        if is_small_step(candidate2, prev):
-            return candidate2
-        return candidate3 if abs(candidate3 - prev) < abs(candidate2 - prev) else candidate2
-    else:
-        if is_small_step(candidate2, prev):
-            return candidate2
+        # Selv om ikke småsteg, bruk tresifret hvis vi allerede er over 100
+        return candidate3
+    
+    # Hvis forrige score var 90-99, kan vi gå over til 100+
+    if prev >= 90:
         if is_small_step(candidate3, prev):
             return candidate3
-        return candidate2 if abs(candidate2 - prev) < abs(candidate3 - prev) else candidate3
+        if is_small_step(candidate2, prev):
+            return candidate2
+        # Foretrekk tresifret hvis vi er nær 100
+        return candidate3 if candidate3 >= 100 else candidate2
+    
+    # Under 90: bruk tosifret tolkning
+    if is_small_step(candidate2, prev):
+        return candidate2
+    if is_small_step(candidate3, prev):
+        return candidate3
+    return candidate2 if abs(candidate2 - prev) < abs(candidate3 - prev) else candidate2
 
 # ==========================================================
 #  BODET-PARSER – HOVEDLOGIKK
@@ -329,7 +341,7 @@ def apply_bodet_message(_msg_id: int, msg: bytes):
                 return
 
             status = msg[2]
-            running = bool(status & 0x02)  # bit 1 = RUN
+            running = not bool(status & 0x02)  # bit 1 = RUN (invertert: 0=kjører, 1=stoppet)
 
             # mm:ss
             minutes = dig(msg[4]) * 10 + dig(msg[5])
@@ -411,13 +423,13 @@ def apply_bodet_message(_msg_id: int, msg: bytes):
 
         # 36 – siste minutt, tideler (0:ss.t)
         elif nid == 36:
-            if len(msg) < 5:
+            if len(msg) < 6:
                 return
             status = msg[2]
-            running = bool(status & 0x02)
+            running = not bool(status & 0x02)  # bit 1 = RUN (invertert: 0=kjører, 1=stoppet)
 
-            seconds = dig(msg[2]) * 10 + dig(msg[3])
-            tenths = dig(msg[4])
+            seconds = dig(msg[3]) * 10 + dig(msg[4])
+            tenths = dig(msg[5])
             STATE.clock_seconds = float(seconds) + tenths / 10.0
             STATE.clock_running = running
             STATE.clock = f"0:{seconds:02d}.{tenths}"
@@ -428,7 +440,7 @@ def apply_bodet_message(_msg_id: int, msg: bytes):
             if len(msg) < 5:
                 return
             status = msg[2]
-            running = bool(status & 0x02)
+            running = not bool(status & 0x02)  # bit 1 = RUN (invertert: 0=kjører, 1=stoppet)
 
             shot = dig(msg[3]) * 10 + dig(msg[4])
             STATE.shot_seconds = float(shot)
